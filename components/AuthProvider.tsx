@@ -20,7 +20,7 @@ const AuthCtx = createContext<AuthContextValue>({
 
 export const useAuth = () => useContext(AuthCtx);
 
-// Keep simple role flags, and retain stubby hasPerm for now (UI may still call it)
+// Simple role flags (+ a stubby hasPerm for older UI paths)
 export const useRole = () => {
   const { role, loading } = useAuth();
   return {
@@ -30,7 +30,6 @@ export const useRole = () => {
     isManager: role === 'manager',
     loading,
     hasPerm: (perm: string) => {
-      // Temporary UI helper; true permissions are enforced in SQL via has_perm().
       if (role === 'admin') return true;
       if (role === 'manager') return perm !== 'system_settings';
       return false;
@@ -39,11 +38,8 @@ export const useRole = () => {
 };
 
 /**
- * checkPerm
- * Calls the Supabase RPC `has_perm_rpc(p text, target_client_id text)` which wraps
- * the Postgres function `has_perm(auth.uid(), p, client_id)`.
- * - Admins automatically pass inside SQL (no need to special-case here).
- * - Optionally pass clientId to check per-client scope.
+ * RPC-backed permission check.
+ * Calls has_perm_rpc(p text, target_client_id text) on the server.
  */
 export async function checkPerm(perm: string, clientId?: string): Promise<boolean> {
   const { data, error } = await supabase.rpc('has_perm_rpc', {
@@ -61,7 +57,7 @@ async function fetchRole(userId: string): Promise<RoleType> {
   const { data, error } = await supabase
     .from('user_profiles')
     .select('role')
-    .eq('id', userId) // id matches auth.users.id
+    .eq('id', userId)
     .maybeSingle();
 
   if (error) {
@@ -86,22 +82,16 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
       const sess = data.session ?? null;
       setSession(sess);
 
-      if (sess?.user?.id) {
-        setRole(await fetchRole(sess.user.id));
-      } else {
-        setRole(null);
-      }
+      if (sess?.user?.id) setRole(await fetchRole(sess.user.id));
+      else setRole(null);
+
       setLoading(false);
     };
 
-    const { data: subscription } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
+    const { data: subscription } = supabase.auth.onAuthStateChange(async (_evt, newSession) => {
       setSession(newSession ?? null);
-
-      if (newSession?.user?.id) {
-        setRole(await fetchRole(newSession.user.id));
-      } else {
-        setRole(null);
-      }
+      if (newSession?.user?.id) setRole(await fetchRole(newSession.user.id));
+      else setRole(null);
     });
 
     init();
